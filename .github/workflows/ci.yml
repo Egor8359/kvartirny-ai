@@ -1,0 +1,32 @@
+name: Tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: apartment_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U test_user -d apartment_test"
+          --health-interval 10s --health-timeout 5s --health-retries 10
+    env:
+      APP_ENV: test
+      TEST_POSTGRES_URL: postgresql://test_user:test_password@127.0.0.1:5432/apartment_test
+      ALLOW_TEST_DATABASE: '1'
+      DB_SSL_MODE: disable
+      ROUTERAI_API_KEY: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - run: python -m compileall -q app index.py
+      - run: python -c "from index import app; from pathlib import Path; assert app and all(Path(p).is_file() for p in ['app/templates/index.html', 'app/static/style.css', 'app/static/app.js'])"
+      - run: python -m pytest -q
