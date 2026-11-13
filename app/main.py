@@ -51,8 +51,6 @@ def create_app(database_url=None, ai=None):
     dummy_hash = hash_password(secrets.token_urlsafe(24))
     secure = os.getenv('COOKIE_SECURE', 'false').lower() == 'true'
     public_origin = os.getenv('PUBLIC_ORIGIN', '').rstrip('/')
-    if not public_origin and environment() == 'preview' and os.getenv('VERCEL_URL'):
-        public_origin = 'https://' + os.environ['VERCEL_URL'].rstrip('/')
     if environment() in ('preview', 'production') and (not secure or not public_origin.startswith('https://')):
         raise RuntimeError('В облаке нужны COOKIE_SECURE=true и HTTPS PUBLIC_ORIGIN')
     templates = Jinja2Templates(directory=str(ROOT / 'templates'))

@@ -91,11 +91,9 @@ class EnvironmentIdentity(Base):
     name: Mapped[str]
 
 def environment():
-    platform = os.getenv('VERCEL_ENV')
-    configured = os.getenv('APP_ENV')
-    if platform in ('preview', 'production') and configured and configured != platform:
-        raise RuntimeError('APP_ENV не совпадает с VERCEL_ENV')
-    value = platform if platform in ('preview', 'production') else configured or 'development'
+    if os.getenv('RENDER') == 'true' and not os.getenv('APP_ENV'):
+        raise RuntimeError('На Render необходимо явно указать APP_ENV')
+    value = os.getenv('APP_ENV') or 'development'
     if value not in ('development', 'preview', 'production', 'test'):
         raise RuntimeError('Недопустимое APP_ENV')
     return value
