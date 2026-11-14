@@ -1,5 +1,14 @@
--- Только чтение. Каждая строка с problem <> NULL требует внимания.
-WITH expected(table_name,column_name,data_type,not_null) AS (VALUES
+-- Только чтение. Выполните целиком: итог и причины выводятся как NOTICE.
+DO $verify$
+DECLARE issues text[] := ARRAY[]::text[]; n bigint; c record;
+BEGIN
+  SELECT count(*) INTO n FROM pg_class c JOIN pg_namespace ns ON ns.oid=c.relnamespace
+   WHERE ns.nspname='public' AND c.relkind IN ('r','p') AND c.relname IN ('apartments','environment_identity','rate_windows','users','auth_sessions','conversations','user_leases','messages','user_facts');
+  IF n <> 9 THEN issues := array_append(issues, format('Требуются 9 таблиц, найдено %s', n)); END IF;
+  SELECT count(*) INTO n FROM pg_class c JOIN pg_namespace ns ON ns.oid=c.relnamespace
+   WHERE ns.nspname='public' AND c.relkind IN ('r','p','v','m','f') AND c.relname NOT IN ('apartments','environment_identity','rate_windows','users','auth_sessions','conversations','user_leases','messages','user_facts');
+  IF n <> 0 THEN issues := array_append(issues, format('Посторонние объекты public: %s',n)); END IF;
+  SELECT count(*) INTO n FROM (WITH expected(table_name,column_name,data_type,not_null) AS (VALUES
 ('apartments', 'id', 'character varying', true),
 ('apartments', 'building', 'character varying', true),
 ('apartments', 'rooms', 'integer', true),
@@ -56,9 +65,9 @@ SELECT COALESCE(e.table_name,a.table_name) AS table_name, COALESCE(e.column_name
  e.data_type AS expected_type,a.data_type AS actual_type,e.not_null AS expected_not_null,a.not_null AS actual_not_null,
  CASE WHEN e.column_name IS NULL THEN 'extra column' WHEN a.column_name IS NULL THEN 'missing column'
  WHEN e.data_type<>a.data_type OR e.not_null<>a.not_null THEN 'type or nullability mismatch' END AS problem
-FROM expected e FULL JOIN actual a USING (table_name,column_name) ORDER BY 1,2;
-
-WITH expected(table_name,kind,columns,target,delete_action) AS (VALUES
+FROM expected e FULL JOIN actual a USING (table_name,column_name) ORDER BY 1,2) cols WHERE problem IS NOT NULL;
+  IF n <> 0 THEN issues := array_append(issues, format('Несовпадения столбцов: %s',n)); END IF;
+  SELECT count(*) INTO n FROM (WITH expected(table_name,kind,columns,target,delete_action) AS (VALUES
 ('apartments', 'p', 'id', '', ''),
 ('environment_identity', 'p', 'id', '', ''),
 ('rate_windows', 'p', 'key', '', ''),
@@ -93,30 +102,52 @@ SELECT COALESCE(e.table_name,a.table_name) AS table_name, COALESCE(e.kind,a.kind
  COALESCE(e.delete_action,a.delete_action) AS delete_action,
  CASE WHEN e.table_name IS NULL THEN 'unexpected constraint' WHEN a.table_name IS NULL THEN 'missing or mismatched constraint'
  WHEN NOT a.index_ok THEN 'invalid backing index' END AS problem
-FROM expected e FULL JOIN actual a USING (table_name,kind,columns,target,delete_action) ORDER BY 1,2,3;
-SELECT tablename,indexname,indexdef FROM pg_indexes WHERE schemaname='public' AND tablename IN ('apartments', 'environment_identity', 'rate_windows', 'users', 'auth_sessions', 'conversations', 'user_leases', 'messages', 'user_facts') ORDER BY 1,2;
-SELECT c.relname, c.relrowsecurity AS rls_enabled,
- has_table_privilege('anon', c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS anon_any,
- has_table_privilege('authenticated', c.oid, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AS authenticated_any
-FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-WHERE n.nspname='public' AND c.relkind IN ('r','p') AND c.relname IN ('apartments', 'environment_identity', 'rate_windows', 'users', 'auth_sessions', 'conversations', 'user_leases', 'messages', 'user_facts') ORDER BY 1;
-SELECT c.relname, a.attname,
- has_column_privilege('anon', c.oid, a.attnum, 'SELECT,INSERT,UPDATE,REFERENCES') AS anon_any,
- has_column_privilege('authenticated', c.oid, a.attnum, 'SELECT,INSERT,UPDATE,REFERENCES') AS authenticated_any
-FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid
-WHERE n.nspname='public' AND c.relkind IN ('r','p') AND c.relname IN ('apartments', 'environment_identity', 'rate_windows', 'users', 'auth_sessions', 'conversations', 'user_leases', 'messages', 'user_facts') AND a.attnum>0 AND NOT a.attisdropped ORDER BY 1,2;
-SELECT schemaname,tablename,policyname,roles,cmd FROM pg_policies WHERE schemaname='public' AND tablename IN ('apartments', 'environment_identity', 'rate_windows', 'users', 'auth_sessions', 'conversations', 'user_leases', 'messages', 'user_facts');
-SELECT s.relname AS sequence_name,
- has_sequence_privilege('anon', s.oid, 'USAGE,SELECT,UPDATE') AS anon_any,
- has_sequence_privilege('authenticated', s.oid, 'USAGE,SELECT,UPDATE') AS authenticated_any
-FROM pg_class s JOIN pg_depend d ON d.objid=s.oid AND d.deptype IN ('a','i')
-JOIN pg_class t ON t.oid=d.refobjid JOIN pg_namespace n ON n.oid=t.relnamespace
-WHERE s.relkind='S' AND n.nspname='public' AND t.relname IN ('apartments', 'environment_identity', 'rate_windows', 'users', 'auth_sessions', 'conversations', 'user_leases', 'messages', 'user_facts') ORDER BY 1;
-SELECT id,name FROM public.environment_identity WHERE id=1;
-SELECT count(*) AS apartment_count, count(DISTINCT id) AS distinct_apartments FROM public.apartments;
-
--- Должны отсутствовать любые строки расхождений; дополнительно apartment_count должен быть 12.
-WITH expected(id,building,rooms,area,floor,total_floors,price,finishing,delivery_year,status) AS (VALUES
+FROM expected e FULL JOIN actual a USING (table_name,kind,columns,target,delete_action) ORDER BY 1,2,3) cons WHERE problem IS NOT NULL;
+  IF n <> 0 THEN issues := array_append(issues, format('Несовпадения ограничений или индексов: %s',n)); END IF;
+  SELECT count(*) INTO n FROM pg_constraint co JOIN pg_class t ON t.oid=co.conrelid JOIN pg_namespace ns ON ns.oid=t.relnamespace
+   LEFT JOIN pg_class ref ON ref.oid=co.confrelid LEFT JOIN pg_namespace rn ON rn.oid=ref.relnamespace
+   WHERE ns.nspname='public' AND t.relname IN ('apartments','environment_identity','rate_windows','users','auth_sessions','conversations','user_leases','messages','user_facts') AND
+    (NOT co.convalidated OR co.condeferrable OR (co.contype='f' AND (rn.nspname<>'public' OR co.confupdtype<>'a')));
+  IF n<>0 THEN issues:=array_append(issues,format('Недействительные или нестандартные ограничения: %s',n)); END IF;
+  SELECT count(*) INTO n FROM pg_index i JOIN pg_class t ON t.oid=i.indrelid JOIN pg_namespace ns ON ns.oid=t.relnamespace
+   WHERE ns.nspname='public' AND t.relname IN ('apartments','environment_identity','rate_windows','users','auth_sessions','conversations','user_leases','messages','user_facts') AND (NOT i.indisvalid OR NOT i.indisready);
+  IF n<>0 THEN issues:=array_append(issues,format('Недействительные индексы: %s',n)); END IF;
+  SELECT count(*) INTO n FROM pg_attribute a JOIN pg_class t ON t.oid=a.attrelid JOIN pg_namespace ns ON ns.oid=t.relnamespace
+   LEFT JOIN pg_attrdef def ON def.adrelid=t.oid AND def.adnum=a.attnum
+   WHERE ns.nspname='public' AND t.relkind IN ('r','p') AND t.relname IN ('apartments','environment_identity','rate_windows','users','auth_sessions','conversations','user_leases','messages','user_facts') AND a.attnum>0 AND NOT a.attisdropped
+    AND ((t.relname IN ('environment_identity','users','auth_sessions','conversations','messages','user_facts') AND a.attname='id' AND (def.oid IS NULL OR pg_get_expr(def.adbin,def.adrelid) NOT LIKE 'nextval(%'))
+      OR (NOT (t.relname IN ('environment_identity','users','auth_sessions','conversations','messages','user_facts') AND a.attname='id') AND def.oid IS NOT NULL));
+  IF n<>0 THEN issues:=array_append(issues,format('Несовпадения значений по умолчанию: %s',n)); END IF;
+  SELECT count(*) INTO n FROM pg_class t JOIN pg_namespace ns ON ns.oid=t.relnamespace
+   WHERE ns.nspname='public' AND t.relname IN ('apartments','environment_identity','rate_windows','users','auth_sessions','conversations','user_leases','messages','user_facts') AND t.relkind IN ('r','p') AND NOT t.relrowsecurity;
+  IF n<>0 THEN issues:=array_append(issues,format('Таблиц без RLS: %s',n)); END IF;
+  SELECT count(*) INTO n FROM pg_policies WHERE schemaname='public' AND tablename IN ('apartments','environment_identity','rate_windows','users','auth_sessions','conversations','user_leases','messages','user_facts');
+  IF n<>0 THEN issues:=array_append(issues,format('Обнаружены политики, требуется проверка: %s',n)); END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN
+    issues:=array_append(issues,'Отсутствует роль anon или authenticated');
+  ELSE
+    SELECT count(*) INTO n FROM pg_class t JOIN pg_namespace ns ON ns.oid=t.relnamespace
+     WHERE ns.nspname='public' AND t.relkind IN ('r','p') AND t.relname IN ('apartments','environment_identity','rate_windows','users','auth_sessions','conversations','user_leases','messages','user_facts') AND
+     (has_table_privilege('anon',t.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR has_table_privilege('authenticated',t.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'));
+    IF n<>0 THEN issues:=array_append(issues,format('Публичные права на таблицы: %s',n)); END IF;
+    SELECT count(*) INTO n FROM pg_attribute a JOIN pg_class t ON t.oid=a.attrelid JOIN pg_namespace ns ON ns.oid=t.relnamespace
+     WHERE ns.nspname='public' AND t.relname IN ('apartments','environment_identity','rate_windows','users','auth_sessions','conversations','user_leases','messages','user_facts') AND t.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped AND
+      (has_column_privilege('anon',t.oid,a.attnum,'SELECT,INSERT,UPDATE,REFERENCES') OR has_column_privilege('authenticated',t.oid,a.attnum,'SELECT,INSERT,UPDATE,REFERENCES'));
+    IF n<>0 THEN issues:=array_append(issues,format('Публичные права на столбцы: %s',n)); END IF;
+    SELECT count(*) INTO n FROM pg_class seq JOIN pg_depend d ON d.objid=seq.oid AND d.deptype IN ('a','i') JOIN pg_class t ON t.oid=d.refobjid JOIN pg_namespace ns ON ns.oid=t.relnamespace
+     WHERE seq.relkind='S' AND ns.nspname='public' AND t.relname IN ('apartments','environment_identity','rate_windows','users','auth_sessions','conversations','user_leases','messages','user_facts') AND
+      (has_sequence_privilege('anon',seq.oid,'USAGE,SELECT,UPDATE') OR has_sequence_privilege('authenticated',seq.oid,'USAGE,SELECT,UPDATE'));
+    IF n<>0 THEN issues:=array_append(issues,format('Публичные права на последовательности: %s',n)); END IF;
+  END IF;
+  FOR c IN SELECT * FROM (VALUES ('environment_identity'),('users'),('auth_sessions'),('conversations'),('messages'),('user_facts')) AS x(name) LOOP
+    IF to_regclass(format('public.%I',c.name)) IS NULL THEN
+      issues:=array_append(issues,format('Отсутствует таблица %s',c.name));
+    ELSIF pg_get_serial_sequence(format('public.%I',c.name),'id') IS NULL THEN issues:=array_append(issues,format('Отсутствует последовательность %s.id',c.name)); END IF;
+  END LOOP;
+  IF cardinality(issues)=0 THEN
+    EXECUTE 'SELECT count(*) FROM public.environment_identity WHERE id=1 AND name=''production''' INTO n;
+    IF n<>1 THEN issues:=array_append(issues,'Маркер production отсутствует'); END IF;
+    EXECUTE $query$SELECT count(*) FROM (WITH expected(id,building,rooms,area,floor,total_floors,price,finishing,delivery_year,status) AS (VALUES
 ('A-101', 'Корпус A', 1, 38.2, 1, 12, 5500000, TRUE, 2027, 'available'),
 ('A-406', 'Корпус A', 1, 39.5, 4, 12, 5900000, FALSE, 2027, 'available'),
 ('A-905', 'Корпус A', 1, 41.0, 9, 12, 6400000, FALSE, 2027, 'available'),
@@ -129,5 +160,15 @@ WITH expected(id,building,rooms,area,floor,total_floors,price,finishing,delivery
 ('C-1403', 'Корпус C', 3, 82.0, 14, 16, 11700000, TRUE, 2028, 'available'),
 ('A-1203', 'Корпус A', 0, 27.0, 12, 12, 4300000, TRUE, 2027, 'available'),
 ('B-102', 'Корпус B', 2, 56.0, 1, 16, 7800000, TRUE, 2027, 'available'))
-SELECT COALESCE(e.id,a.id) AS id FROM expected e FULL JOIN public.apartments a ON a.id=e.id WHERE e.id IS NULL OR a.id IS NULL OR ROW(e.building,e.rooms,e.area,e.floor,e.total_floors,e.price,e.finishing,e.delivery_year,e.status) IS DISTINCT FROM ROW(a.building,a.rooms,a.area,a.floor,a.total_floors,a.price,a.finishing,a.delivery_year,a.status);
-SELECT (SELECT count(*) FROM public.users) AS users, (SELECT count(*) FROM public.conversations) AS conversations, (SELECT count(*) FROM public.messages) AS messages, (SELECT count(*) FROM public.user_facts) AS facts, (SELECT count(*) FROM public.auth_sessions) AS sessions;
+SELECT COALESCE(e.id,a.id) AS id FROM expected e FULL JOIN public.apartments a ON a.id=e.id WHERE e.id IS NULL OR a.id IS NULL OR ROW(e.building,e.rooms,e.area,e.floor,e.total_floors,e.price,e.finishing,e.delivery_year,e.status) IS DISTINCT FROM ROW(a.building,a.rooms,a.area,a.floor,a.total_floors,a.price,a.finishing,a.delivery_year,a.status)) differences$query$ INTO n;
+    IF n<>0 THEN issues:=array_append(issues,format('Несовпадения каталога: %s',n)); END IF;
+    EXECUTE 'SELECT (SELECT count(*) FROM public.users)+(SELECT count(*) FROM public.conversations)+(SELECT count(*) FROM public.messages)+(SELECT count(*) FROM public.user_facts)+(SELECT count(*) FROM public.auth_sessions)+(SELECT count(*) FROM public.user_leases)+(SELECT count(*) FROM public.rate_windows)' INTO n;
+    IF n<>0 THEN issues:=array_append(issues,format('Пользовательские или служебные записи: %s',n)); END IF;
+  ELSE
+    issues:=array_append(issues,'Проверка данных пропущена из-за предыдущих ошибок');
+  END IF;
+  IF cardinality(issues)=0 THEN RAISE NOTICE 'PASS: все обязательные проверки пройдены';
+  ELSE RAISE NOTICE 'FAIL: %', array_to_string(issues, '; '); END IF;
+EXCEPTION WHEN OTHERS THEN
+  RAISE NOTICE 'FAIL: ошибка проверки (SQLSTATE %): %', SQLSTATE, SQLERRM;
+END $verify$;
