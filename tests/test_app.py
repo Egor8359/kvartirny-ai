@@ -275,3 +275,105 @@ def test_source_message_null_after_delete(env):
     c.delete(f'/api/conversations/{cid}')
     assert c.get('/api/facts').json()[0]['source_message_id'] is None
     assert fact_map(c)['rooms'] == 2
+
+
+def matching_catalog(client):
+    response = client.get('/api/apartments?matching_only=true')
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, dict), 'Персональный каталог должен сообщать, заданы ли применимые критерии'
+    assert isinstance(data['criteria_applied'], bool)
+    assert isinstance(data['items'], list)
+    return data
+
+
+def set_preferences(client, **values):
+    for key, value in values.items():
+        response = client.put('/api/facts/' + key, json={'value': value})
+        assert response.status_code == 200, response.text
+
+
+def test_matching_regular_catalog_is_unchanged(env):
+    _, client, _, _ = env
+    login(client)
+    default = client.get('/api/apartments').json()
+    assert isinstance(default, list) and len(default) == 12
+    assert client.get('/api/apartments?matching_only=false').json() == default
+
+
+def test_matching_requires_authentication(env):
+    _, client, _, _ = env
+    assert client.get('/api/apartments?matching_only=true').status_code == 401
+
+
+def test_matching_budget_and_rooms(env):
+    _, client, _, _ = env
+    login(client)
+    set_preferences(client, rooms=2, budget_max=9000000)
+    result = matching_catalog(client)
+    assert result['criteria_applied'] is True
+    assert {a['id'] for a in result['items']} == {'B-102', 'B-203', 'B-705', 'B-1201'}
+    assert [a['price'] for a in result['items']] == sorted(a['price'] for a in result['items'])
+
+
+def test_matching_combines_multiple_conditions(env):
+    _, client, _, _ = env
+    login(client)
+    set_preferences(client, rooms=2, budget_max=9000000, finishing=True, exclude_first_floor=True, min_area=60)
+    assert [a['id'] for a in matching_catalog(client)['items']] == ['B-705']
+
+
+def test_matching_no_results_distinct_from_no_criteria(env):
+    _, client, _, _ = env
+    login(client)
+    empty = matching_catalog(client)
+    assert empty['criteria_applied'] is False and empty['items'] == []
+    set_preferences(client, other_preferences='Нужна кладовая')
+    assert matching_catalog(client)['criteria_applied'] is False
+    set_preferences(client, rooms=3, budget_max=5000000)
+    result = matching_catalog(client)
+    assert result['criteria_applied'] is True and result['items'] == []
+
+
+def test_matching_available_only_and_no_three_item_limit(env):
+    app, client, _, _ = env
+    login(client)
+    set_preferences(client, budget_max=12000000)
+    from app.database import Apartment
+    with app.state.session_factory() as db:
+        db.get(Apartment, 'A-101').status = 'sold'
+        db.commit()
+    result = matching_catalog(client)['items']
+    assert len(result) == 11
+    assert all(a['id'] != 'A-101' for a in result)
+
+
+def test_matching_uses_only_current_users_memory(env):
+    _, client, _, _ = env
+    login(client, 'anna')
+    set_preferences(client, rooms=2)
+    login(client, 'maxim')
+    set_preferences(client, rooms=1)
+    assert all(a['rooms'] == 1 for a in matching_catalog(client)['items'])
+    login(client, 'anna')
+    assert all(a['rooms'] == 2 for a in matching_catalog(client)['items'])
+
+
+def test_matching_reflects_changed_and_deleted_preferences(env):
+    _, client, _, _ = env
+    login(client)
+    set_preferences(client, rooms=1)
+    assert all(a['rooms'] == 1 for a in matching_catalog(client)['items'])
+    set_preferences(client, rooms=3)
+    assert all(a['rooms'] == 3 for a in matching_catalog(client)['items'])
+    assert client.delete('/api/facts/rooms').status_code == 200
+    assert matching_catalog(client)['criteria_applied'] is False
+
+
+def test_matching_specific_apartment_and_year(env):
+    _, client, _, _ = env
+    login(client)
+    set_preferences(client, interested_apartment='C-804', delivery_year=2027)
+    assert matching_catalog(client)['items'] == []
+    set_preferences(client, delivery_year=2028)
+    assert [a['id'] for a in matching_catalog(client)['items']] == ['C-804']
