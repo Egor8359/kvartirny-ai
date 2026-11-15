@@ -1,6 +1,6 @@
 -- Только чтение. Выполните целиком: итог и причины выводятся как NOTICE.
 DO $verify$
-DECLARE issues text[] := ARRAY[]::text[]; n bigint; c record;
+DECLARE issues text[] := ARRAY[]::text[]; n bigint; serial_table record;
 BEGIN
   SELECT count(*) INTO n FROM pg_class c JOIN pg_namespace ns ON ns.oid=c.relnamespace
    WHERE ns.nspname='public' AND c.relkind IN ('r','p') AND c.relname IN ('apartments','environment_identity','rate_windows','users','auth_sessions','conversations','user_leases','messages','user_facts');
@@ -139,10 +139,10 @@ FROM expected e FULL JOIN actual a USING (table_name,kind,columns,target,delete_
       (has_sequence_privilege('anon',seq.oid,'USAGE,SELECT,UPDATE') OR has_sequence_privilege('authenticated',seq.oid,'USAGE,SELECT,UPDATE'));
     IF n<>0 THEN issues:=array_append(issues,format('Публичные права на последовательности: %s',n)); END IF;
   END IF;
-  FOR c IN SELECT * FROM (VALUES ('environment_identity'),('users'),('auth_sessions'),('conversations'),('messages'),('user_facts')) AS x(name) LOOP
-    IF to_regclass(format('public.%I',c.name)) IS NULL THEN
-      issues:=array_append(issues,format('Отсутствует таблица %s',c.name));
-    ELSIF pg_get_serial_sequence(format('public.%I',c.name),'id') IS NULL THEN issues:=array_append(issues,format('Отсутствует последовательность %s.id',c.name)); END IF;
+  FOR serial_table IN SELECT * FROM (VALUES ('environment_identity'),('users'),('auth_sessions'),('conversations'),('messages'),('user_facts')) AS x(name) LOOP
+    IF to_regclass(format('public.%I',serial_table.name)) IS NULL THEN
+      issues:=array_append(issues,format('Отсутствует таблица %s',serial_table.name));
+    ELSIF pg_get_serial_sequence(format('public.%I',serial_table.name),'id') IS NULL THEN issues:=array_append(issues,format('Отсутствует последовательность %s.id',serial_table.name)); END IF;
   END LOOP;
   IF cardinality(issues)=0 THEN
     EXECUTE 'SELECT count(*) FROM public.environment_identity WHERE id=1 AND name=''production''' INTO n;
