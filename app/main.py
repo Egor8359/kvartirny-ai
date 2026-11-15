@@ -16,7 +16,7 @@ from sqlalchemy.orm import sessionmaker
 from .database import make_engine, check_environment, environment, User, AuthSession, Conversation, Message, Fact, Apartment, now
 from .coordination import consume, acquire, release
 from .security import verify_password, token_hash, csrf_for, hash_password
-from .services import RouterAI, LABELS, facts_for, fact_rows, upsert_fact, validate_fact, validate_changes, apply_changes, build_context, render_answer, apartment_dict
+from .services import RouterAI, LABELS, facts_for, fact_rows, upsert_fact, validate_fact, validate_changes, apply_changes, build_context, render_answer, apartment_dict, conditions
 
 ROOT = Path(__file__).resolve().parent
 COOKIE = 'apartment_session'
@@ -158,8 +158,14 @@ def create_app(database_url=None, ai=None):
         return response
 
     @app.get('/api/apartments')
-    def apartments(user=Depends(current_user), db=Depends(db_session)):
-        return [apartment_dict(a) for a in db.scalars(select(Apartment).order_by(Apartment.price))]
+    def apartments(matching_only: bool = False, user=Depends(current_user), db=Depends(db_session)):
+        if not matching_only:
+            return [apartment_dict(a) for a in db.scalars(select(Apartment).order_by(Apartment.price))]
+        filters = conditions(facts_for(db, user.id))
+        if not filters:
+            return {'criteria_applied': False, 'items': []}
+        stmt = select(Apartment).where(Apartment.status == 'available', *filters.values()).order_by(Apartment.price)
+        return {'criteria_applied': True, 'items': [apartment_dict(a) for a in db.scalars(stmt)]}
 
     @app.get('/api/facts')
     def own_facts(user=Depends(current_user), db=Depends(db_session)):

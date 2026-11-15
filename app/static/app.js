@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-let csrf = '', user = null, labels = {}, activeId = null, facts = [], busy = false, timer;
+let csrf = '', user = null, labels = {}, activeId = null, facts = [], busy = false, timer, catalogRequest = 0;
 function el(tag, text, cls) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (cls) node.className = cls; return node; }
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(timer); timer = setTimeout(() => $('toast').hidden = true, 6500); }
 async function api(path, method = 'GET', body) {
@@ -21,6 +21,7 @@ function formatted(key, value) {
   return String(value);
 }
 function clearPrivateViews() {
+  catalogRequest++; $('matching-only').checked = false; $('catalog').replaceChildren(); $('catalog-count').textContent = ''; $('catalog-empty').hidden = true;
   for (const id of ['messages','memory-list','own-fact-editor','admin-detail','conversations','admin-users']) $(id).replaceChildren();
   $('used-facts').hidden = true; $('memory-indicator').hidden = true;
 }
@@ -111,8 +112,19 @@ $('chat-form').addEventListener('submit', async event => {
     $('chat-input').focus();
   }
 });
+$('matching-only').addEventListener('change', () => loadCatalog().catch(e => toast(e.message)));
+$('catalog-manage-memory').addEventListener('click', () => switchView('data').catch(e => toast(e.message)));
 async function loadCatalog() {
-  const rows = await api('/apartments'); const target = $('catalog'); target.replaceChildren();
+  const request = ++catalogRequest, matching = $('matching-only').checked;
+  const target = $('catalog'); target.replaceChildren(); $('catalog-count').textContent = ''; $('catalog-empty').hidden = true;
+  const data = await api(matching ? '/apartments?matching_only=true' : '/apartments');
+  if (request !== catalogRequest || !user) return;
+  const rows = matching ? data.items : data;
+  $('catalog-count').textContent = 'Найдено квартир: ' + rows.length;
+  if (matching && (!data.criteria_applied || !rows.length)) {
+    $('catalog-empty-text').textContent = data.criteria_applied ? 'По вашим сохранённым пожеланиям подходящих квартир пока нет' : 'Критерии подбора ещё не заданы';
+    $('catalog-empty').hidden = false;
+  }
   for (const a of rows) {
     const card = el('article',undefined,'apartment-card'); const plan = el('div',undefined,'floor-plan'); const outline = el('div',undefined,'plan-outline'); outline.setAttribute('aria-hidden','true'); for(let i=0;i<4;i++) outline.append(el('i')); plan.append(el('span',a.building + ' · ' + a.id),outline);
     const info = el('div',undefined,'card-details'); info.append(el('div','СДАЧА В ' + a.delivery_year + ' ГОДУ','card-meta'),el('h3',(a.rooms === 0 ? 'Студия' : a.rooms + '-комнатная') + ' · ' + a.area + ' м²'),el('div',formatted('budget_max',a.price),'card-price'),el('div',a.floor + '/' + a.total_floors + ' этаж · ' + (a.finishing ? 'С отделкой' : 'Без отделки'),'card-specs'),el('span','Учебный объект','card-tag'));
