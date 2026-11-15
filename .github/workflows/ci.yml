@@ -30,3 +30,4 @@ jobs:
       - run: python -m compileall -q app index.py
       - run: python -c "from index import app; from pathlib import Path; assert app and all(Path(p).is_file() for p in ['app/templates/index.html', 'app/static/style.css', 'app/static/app.js'])"
       - run: python -m pytest -q
+      - run: python scripts/check_production_sql.py

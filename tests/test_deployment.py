@@ -216,3 +216,14 @@ def test_postgres_isolated_integration(monkeypatch):
         assert client.get(f'/api/conversations/{cid}').status_code == 404
         assert client.get('/api/facts').json() == []
     engine.dispose()
+
+def test_render_requires_explicit_environment(monkeypatch):
+    from app.database import environment
+    monkeypatch.setenv('RENDER', 'true')
+    monkeypatch.delenv('APP_ENV', raising=False)
+    with pytest.raises(RuntimeError, match='APP_ENV'):
+        environment()
+    monkeypatch.setenv('APP_ENV', 'preview')
+    assert environment() == 'preview'
+    monkeypatch.setenv('APP_ENV', 'production')
+    assert environment() == 'production'
